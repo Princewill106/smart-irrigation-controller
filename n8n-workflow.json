@@ -1,0 +1,315 @@
+{
+  "name": "Smart Irrigation Controller (ESP32) (AI Automation Projects #48)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "irrigation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "8ecaff36-a485-5fb2-bace-b80f6924bf45",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "bebf7f55-9167-5f0a-a9df-d53d91935525"
+    },
+    {
+      "parameters": {},
+      "id": "fc1715d7-6c1a-5b2c-81ea-c34873cc6449",
+      "name": "Test with sample data",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Sample data from this repo. Click 'Test workflow' to run the whole flow on it.\nconst sample = [\n {\n  \"device\": \"farm-1\",\n  \"s1\": 30,\n  \"s2\": 31,\n  \"s3\": 29,\n  \"crop_day\": 6,\n  \"forecast_mm\": 0\n },\n {\n  \"device\": \"farm-1\",\n  \"s1\": 30,\n  \"s2\": 31,\n  \"s3\": 29,\n  \"crop_day\": 6,\n  \"forecast_mm\": 12\n },\n {\n  \"device\": \"farm-2\",\n  \"s1\": 10,\n  \"s2\": 10,\n  \"s3\": 90,\n  \"crop_day\": 2,\n  \"forecast_mm\": 0\n },\n {\n  \"device\": \"farm-3\",\n  \"s1\": 55,\n  \"s2\": 54,\n  \"s3\": 56,\n  \"crop_day\": 11,\n  \"forecast_mm\": 0\n }\n];\nreturn sample.map(json => ({ json }));"
+      },
+      "id": "c9115ea1-8b55-5d49-be22-5a54d3064632",
+      "name": "Sample data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Smart Irrigation Controller (ESP32): core logic (ported from main.py)\n\n// ---- input normaliser (works for Webhook, Form, WhatsApp, Gmail, Sheets and sample data)\nconst input = $input.all().flatMap(i => {\n  const j = i.json || {};\n  if (j.messages && Array.isArray(j.messages)) {           // WhatsApp Trigger\n    return j.messages.filter(m => m.text).map(m => ({ from: '+' + m.from, text: m.text.body }));\n  }\n  if (j.Subject !== undefined || j.From !== undefined) {     // Gmail Trigger (simple)\n    return [{ from: (j.From || '').replace(/.*<|>.*/g, ''), subject: j.Subject || '', body: j.snippet || j.text || '' }];\n  }\n  const b = (j.body !== undefined && j.headers !== undefined) ? j.body : j;   // Webhook wraps payload in body\n  if (Array.isArray(b)) return b;\n  if (b && Array.isArray(b.items)) return b.items;\n  return [b];\n});\n\nconst STAGES = [[0, 4, 45], [5, 9, 38], [10, 13, 42]], MAX_RUN = 20, PER_POINT = 0.8, OFFSET = 12, RAIN_SKIP = 5, FARMER = '+2348000000000';\nreturn input.map(r => {\n  const s = [r.s1, r.s2, r.s3].map(Number).sort((a, b) => a - b), m = s[1];\n  const th = (STAGES.find(([a, b]) => r.crop_day >= a && r.crop_day <= b) || STAGES[STAGES.length - 1])[2];\n  let minutes = 0, reason;\n  if (m >= th) reason = `moist enough (${m}% >= ${th}%)`;\n  else if (Number(r.forecast_mm || 0) >= RAIN_SKIP) reason = `dry (${m}%) but ${r.forecast_mm} mm rain forecast`;\n  else { minutes = Math.min(MAX_RUN, Math.round((th + OFFSET - m) * PER_POINT)); reason = `dry (${m}% < ${th}%), watering ${minutes} min`; }\n  return { json: { route: minutes ? 'watering' : 'log', device: r.device, median: m, threshold: th, valve_min: minutes, reason, to: FARMER,\n    message: `${r.device}: ${reason}`, at: new Date().toISOString() } };\n});\n"
+      },
+      "id": "b9ea9011-58d1-57e3-bb45-846c4a7e233d",
+      "name": "Logic",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "allIncomingItems",
+        "options": {}
+      },
+      "id": "4fcfc4e5-4b1d-5202-9b51-5ef4fb0697c6",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        720,
+        -120
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "86642041-cd93-5d4c-bf02-0476c24305fd",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "watering",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "watering"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "3be766a5-8722-575f-86d0-f3b520f71b63",
+                    "leftValue": "={{ $json.route }}",
+                    "rightValue": "log",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "log"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "be422f9a-faca-513e-a220-33cbfa801668",
+      "name": "Route",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        720,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "send",
+        "phoneNumberId": "YOUR_PHONE_NUMBER_ID",
+        "recipientPhoneNumber": "={{ $json.to }}",
+        "textBody": "={{ $json.message }}",
+        "additionalFields": {}
+      },
+      "id": "fbf8ac7e-e594-5bfc-b382-c799dede6ec0",
+      "name": "Tell the farmer (WhatsApp)",
+      "type": "n8n-nodes-base.whatsApp",
+      "typeVersion": 1,
+      "position": [
+        980,
+        -60
+      ],
+      "webhookId": "fbf8ac7e-e594-5bfc-b382-c799dede6ec0"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "5a1d7899-b588-5a8c-83a9-62f6b5fd5ffb",
+      "name": "Log watering",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "id": "ec5a86f9-efc9-56d8-8ae1-c0b1b9a49d9b",
+      "name": "Log reading",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        980,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Smart Irrigation Controller (ESP32)\nWaters on soil data and the weather forecast, not on a timer, with a manual override any farmer can use.\n\nThe cloud side of the ESP32 controller in this repo. Point the firmware's WEBHOOK_URL here: each reading is checked (median of 3 sensors vs crop-stage threshold, rain forecast skip, max run time), logged to a sheet, and the farmer gets a WhatsApp message whenever the valve opens. The webhook response tells the device what to do.\n\n**Try it:** click *Test workflow* to run on the sample data. Then connect your credentials on the output nodes and activate.\n\nCode and docs: github.com/Princewill106/smart-irrigation-controller",
+        "height": 340,
+        "width": 420,
+        "color": 5
+      },
+      "id": "64bfe981-1d21-55b6-892d-1887b52fccd4",
+      "name": "About this workflow",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -40,
+        -460
+      ]
+    }
+  ],
+  "connections": {
+    "Test with sample data": {
+      "main": [
+        [
+          {
+            "node": "Sample data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Sample data": {
+      "main": [
+        [
+          {
+            "node": "Logic",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Logic": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route": {
+      "main": [
+        [
+          {
+            "node": "Tell the farmer (WhatsApp)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log watering",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log reading",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
